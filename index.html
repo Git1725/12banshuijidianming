@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>3D 球体课堂点名 · 一（12）班</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%; overflow: hidden;
+    background: radial-gradient(circle at 50% 38%, #14284a 0%, #0a1424 55%, #04070d 100%);
+    font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    color: #eaf2ff; user-select: none;
+  }
+  #stage { display: block; width: 100%; height: 100%; cursor: grab; }
+  #stage:active { cursor: grabbing; }
+
+  /* ===== 结果面板 ===== */
+  #panel {
+    position: fixed; inset: 0; z-index: 4;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    pointer-events: none; opacity: 0; transform: scale(.82);
+    transition: opacity .4s ease, transform .5s cubic-bezier(.2, 1.5, .4, 1);
+  }
+  #panel.show { opacity: 1; transform: scale(1); }
+  #panel .label {
+    font-size: 15px; letter-spacing: .55em; text-indent: .55em;
+    color: #7fb0e0; margin-bottom: 12px;
+  }
+  #winnerText {
+    font-size: clamp(52px, 13vmin, 170px);
+    font-weight: 800; letter-spacing: .06em;
+    background: linear-gradient(180deg, #ffffff 0%, #9fd8ff 55%, #5aa8ff 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    filter: drop-shadow(0 0 26px rgba(120, 195, 255, .85))
+            drop-shadow(0 0 70px rgba(90, 130, 255, .55));
+  }
+
+  /* ===== 按钮 ===== */
+  .hud {
+    position: fixed; left: 0; right: 0; bottom: 42px; z-index: 5;
+    display: flex; justify-content: center;
+  }
+  #btn {
+    padding: 16px 56px; font-size: 20px; font-weight: 700;
+    font-family: inherit; letter-spacing: .18em; text-indent: .18em;
+    color: #08121f; border: none; border-radius: 999px; cursor: pointer;
+    background: linear-gradient(135deg, #7fd4ff, #4ea8ff 45%, #8b7bff);
+    box-shadow: 0 8px 30px rgba(78, 168, 255, .45),
+                inset 0 1px 0 rgba(255, 255, 255, .65);
+    transition: transform .15s, box-shadow .25s, filter .25s;
+  }
+  #btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 12px 40px rgba(78, 168, 255, .65); }
+  #btn:active:not(:disabled) { transform: translateY(1px) scale(.98); }
+  #btn:disabled { filter: grayscale(.45) brightness(.85); cursor: default; }
+  #btn.stop {
+    background: linear-gradient(135deg, #ffd166, #ff9f43 50%, #ff6b6b);
+    box-shadow: 0 8px 30px rgba(255, 140, 80, .5),
+                inset 0 1px 0 rgba(255, 255, 255, .6);
+  }
+
+  .tip {
+    position: fixed; left: 0; right: 0; bottom: 16px; z-index: 5;
+    text-align: center; font-size: 13px; color: #4f7ba8; letter-spacing: .1em;
+  }
+</style>
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+
+<div id="panel">
+  <div class="label">本 次 幸 运 同 学</div>
+  <div id="winnerText"></div>
+</div>
+
+<div class="hud"><button id="btn">开 始 点 名</button></div>
+<div class="tip">点击按钮或按空格键 开始 / 停止　·　鼠标拖动可旋转球体</div>
+
+<script>
+(function () {
+  'use strict';
+
+  /* =========================================================
+     ① 一（12）班学生名单
+     共 67 人（原表“张欣怡”重复一次且身份证相同，已去重）
+     ========================================================= */
+  const NAMES = [
+    "徐锐馨", "邢峻嘉", "林梓轩", "程思语", "段奇龙", "张欣怡", "卢靖琪", "周婉婷",
+    "柯雪怡", "石欣蕊", "吴雨航", "邱思雨", "张昕慧", "黄梦昊", "许洹瑞", "李梦洁",
+    "周沐涵", "陈文博", "赵嘉恩", "杨婉疑", "张川平", "徐林梓", "彭雨成", "邵诗蕊",
+    "杨欣悦", "周若闻", "温子婷", "吴庆圆", "袁诚俊", "王妙菱", "赵登婕", "夏雨欣",
+    "信章锐", "周圣越", "赵语萱", "安馨妍", "殷舒心", "张靖琪", "刘煜棋", "罗雨萱",
+    "张欣悦", "张栩瑞", "刘奕轩", "刘世轩", "周子琪", "兰淑瑶", "马彬洋", "邓子佳",
+    "李沫霖", "罗茜茜", "王靖仁", "易艳丽", "李天奇", "刘景逸", "吴起菱", "张子宸",
+    "付梓峻", "王子铭", "吴宝罗", "熊梓涵", "申博文", "沈成威", "徐伟杰", "岳子博",
+    "董兆威", "罗宇航", "马文强"
+  ];
+
+  /* =========================================================
+     ② 基础环境
+     ========================================================= */
+  const canvas = document.getElementById('stage');
+  const ctx    = canvas.getContext('2d');
+  const btn    = document.getElementById('btn');
+  const panel  = document.getElementById('panel');
+  const winnerText = document.getElementById('winnerText');
+
+  let W = 0, H = 0, DPR = 1;
+  let cx = 0, cy = 0, R = 200, baseFont = 18;
+
+  const PERSP = 2.8;          // 透视强度（越大越平）
+  const TAU   = Math.PI * 2;
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width  = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    canvas.style.width  = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+    cx = W / 2;
+    cy = H / 2 - 12;
+    R  = Math.min(W, H) * 0.33;
+    baseFont = Math.max(12, Math.min(W, H) * 0.024);  // 67 人字号略小
+  }
+
+  /* =========================================================
+     ③ 斐波那契球面均匀布点
+     ========================================================= */
+  const pts = NAMES.map(function (name, i) {
+    const n  = NAMES.length;
+    const ga = Math.PI * (3 - Math.sqrt(5));
+    const y  = 1 - (i + 0.5) * 2 / n;
+    const r  = Math.sqrt(Math.max(0, 1 - y * y));
+    const th = ga * i;
+    return {
+      idx: i, name: name,
+      x: Math.cos(th) * r,
+      y: y,
+      z: Math.sin(th) * r,
+      sx: 0, sy: 0, sc: 1, dep: 0
+    };
+  });
+
+  /* =========================================================
+     ④ 状态机
+     ========================================================= */
+  let ry = 0, rx = 0.08;
+  let state = 'idle';
+  let hoverIdx = -1;
+  let winnerIdx = -1;
+  let flashTimer = null;
+
+  let ryFrom = 0, ryTo = 0, rxFrom = 0, rxTo = 0;
+  let stopStart = 0;
+  const STOP_DUR = 1600;
+
+  /* =========================================================
+     ⑤ 旋转 + 透视投影
+     ========================================================= */
+  function project() {
+    const cosY = Math.cos(ry), sinY = Math.sin(ry);
+    const cosX = Math.cos(rx), sinX = Math.sin(rx);
+
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+
+      const x1 =  p.x * cosY - p.z * sinY;
+      const z1 =  p.x * sinY + p.z * cosY;
+      const y2 =  p.y * cosX - z1 * sinX;
+      const z2 =  p.y * sinX + z1 * cosX;
+
+      const s = PERSP / (PERSP - z2);
+      p.sx  = cx + x1 * R * s;
+      p.sy  = cy + y2 * R * s;
+      p.sc  = s;
+      p.dep = z2;
+    }
+  }
+
+  /* =========================================================
+     ⑥ 绘制
+     ========================================================= */
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+
+    ctx.beginPath();
+    ctx.arc(cx, cy, R * 1.04, 0, TAU);
+    ctx.strokeStyle = 'rgba(90, 150, 255, .07)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
+    project();
+
+    const order = pts.slice().sort(function (a, b) { return a.dep - b.dep; });
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    for (let k = 0; k < order.length; k++) {
+      const p = order[k];
+
+      if (state === 'result' && p.idx === winnerIdx) continue;
+
+      const hot = (state === 'spinning' && p.idx === hoverIdx);
+      const alpha = 0.25 + 0.75 * ((p.dep + 1) / 2);
+      let fs = baseFont * p.sc;
+
+      if (hot) {
+        fs *= 1.4;
+        ctx.shadowColor = 'rgba(255, 210, 100, .95)';
+        ctx.shadowBlur  = 20;
+        ctx.fillStyle   = '#ffd666';
+      } else {
+        ctx.shadowBlur = 0;
+        ctx.fillStyle  = 'rgba(160, 205, 255, ' + alpha.toFixed(3) + ')';
+      }
+
+      ctx.font = '600 ' + fs.toFixed(1) + 'px "Microsoft YaHei","PingFang SC",sans-serif';
+      ctx.fillText(p.name, p.sx, p.sy);
+    }
+
+    ctx.shadowBlur = 0;
+  }
+
+  /* =========================================================
+     ⑦ 每帧角度更新
+     ========================================================= */
+  function updateAngles(dt, now) {
+    if (state === 'stopping') {
+      const t = Math.min(1, (now - stopStart) / STOP_DUR);
+      const e = 1 - Math.pow(1 - t, 3);
+      ry = ryFrom + (ryTo - ryFrom) * e;
+      rx = rxFrom + (rxTo - rxFrom) * e;
+      if (t >= 1) {
+        state = 'result';
+        showResult();
+      }
+      return;
+    }
+
+    if (dragging) return;
+
+    if (state === 'spinning') {
+      ry += 5.5 * dt;
+    } else {
+      ry += 0.38 * dt;
+    }
+  }
+
+  /* =========================================================
+     ⑧ 开始 / 停止
+     ========================================================= */
+  function start() {
+    if (state === 'spinning' || state === 'stopping') return;
+
+    state = 'spinning';
+    winnerIdx = -1;
+    panel.classList.remove('show');
+    btn.textContent = '停 止';
+    btn.classList.add('stop');
+
+    clearInterval(flashTimer);
+    flashTimer = setInterval(function () {
+      hoverIdx = Math.floor(Math.random() * pts.length);
+    }, 70);
+  }
+
+  function stop() {
+    if (state !== 'spinning') return;
+
+    clearInterval(flashTimer);
+    flashTimer = null;
+    hoverIdx = -1;
+    winnerIdx = Math.floor(Math.random() * pts.length);
+
+    const p = pts[winnerIdx];
+
+    let tRy = Math.atan2(p.x, p.z);
+    while (tRy < ry + TAU * 2.5) tRy += TAU;
+    const z1 = Math.sqrt(p.x * p.x + p.z * p.z);
+    const tRx = Math.atan2(p.y, Math.max(z1, 1e-6));
+
+    ryFrom = ry;  rxFrom = rx;
+    ryTo   = tRy; rxTo   = tRx;
+    stopStart = performance.now();
+
+    state = 'stopping';
+    btn.textContent = '抽 取 中…';
+    btn.disabled = true;
+  }
+
+  function showResult() {
+    btn.disabled = false;
+    btn.textContent = '再 抽 一 次';
+    btn.classList.remove('stop');
+
+    winnerText.textContent = pts[winnerIdx].name;
+    panel.classList.add('show');
+  }
+
+  /* =========================================================
+     ⑨ 主循环
+     ========================================================= */
+  let prev = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.05, (now - prev) / 1000);
+    prev = now;
+    updateAngles(dt, now);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  /* =========================================================
+     ⑩ 交互
+     ========================================================= */
+  btn.addEventListener('click', function () {
+    if (state === 'spinning')      stop();
+    else if (state === 'idle' || state === 'result') start();
+  });
+
+  window.addEventListener('keydown', function (e) {
+    if (e.code === 'Space' || e.key === ' ') {
+      e.preventDefault();
+      if (state === 'spinning') stop();
+      else if (state === 'idle' || state === 'result') start();
+    }
+  });
+
+  let dragging = false, lastX = 0, lastY = 0;
+  canvas.addEventListener('pointerdown', function (e) {
+    if (state === 'spinning' || state === 'stopping') return;
+    dragging = true;
+    lastX = e.clientX; lastY = e.clientY;
+    canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', function (e) {
+    if (!dragging) return;
+    ry += (e.clientX - lastX) * 0.006;
+    rx  = Math.max(-1.3, Math.min(1.3, rx + (e.clientY - lastY) * 0.006));
+    lastX = e.clientX; lastY = e.clientY;
+  });
+  canvas.addEventListener('pointerup',     function () { dragging = false; });
+  canvas.addEventListener('pointercancel', function () { dragging = false; });
+
+  window.addEventListener('resize', resize);
+
+  /* =========================================================
+     ⑪ 启动
+     ========================================================= */
+  resize();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
